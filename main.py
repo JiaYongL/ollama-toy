@@ -99,6 +99,20 @@ def analyze_directory(dir_path: str, model: str):
       - jbr_err*.log
       - java_error*.log
       - hs_err_pid*.log
+    
+    每个目录最多取2个日志文件，合并前100行后统一分析。
+    
+    结果格式：
+    {
+      "dir_name_1": {
+        "files": ["file1.log", "file2.log"],
+        "analysis": {...}
+      },
+      "dir_name_2": {
+        "files": ["file3.log"],
+        "analysis": {...}
+      }
+    }
     """
     analyzer = SystemPromptAnalyzer(model=model)
 
@@ -106,6 +120,7 @@ def analyze_directory(dir_path: str, model: str):
     patterns = [
         "jbr_err*.log",
         "java_error*.log",
+        "hs_err_pid*.log",
     ]
 
     log_files = []
@@ -121,44 +136,69 @@ def analyze_directory(dir_path: str, model: str):
     if not log_files:
         print(f"\n⚠️  在目录 {dir_path} 中未找到匹配的日志文件")
         print(f"   支持的文件模式: {', '.join(patterns)}")
+        return
 
     print(f"\n{'#'*60}")
     print(f"# 找到 {len(log_files)} 个日志文件")
     print(f"{'#'*60}\n")
 
-    # 批量分析
-    results = []
-    for i, log_file in enumerate(log_files, 1):
-        print(f"\n[{i}/{len(log_files)}] 分析: {os.path.basename(log_file)}")
+    # 按目录分组文件
+    files_by_dir = {}
+    for log_file in log_files:
+        # 获取相对于根目录的目录名作为键
+        rel_path = os.path.relpath(os.path.dirname(log_file), dir_path)
+        dir_key = rel_path if rel_path != "." else "root"
+        
+        if dir_key not in files_by_dir:
+            files_by_dir[dir_key] = []
+        files_by_dir[dir_key].append(log_file)
+
+    # 按目录分析（每个目录最多2个文件，合并后分析）
+    results_by_dir = {}
+    total_dirs = len(files_by_dir)
+    
+    for dir_idx, (dir_key, dir_files) in enumerate(files_by_dir.items(), 1):
+        # 每个目录最多取2个文件
+        dir_files = dir_files[:2]
+        
+        print(f"\n[{dir_idx}/{total_dirs}] 分析目录: {dir_key}")
+        print(f"   文件数: {len(dir_files)}")
+        for f in dir_files:
+            print(f"     - {os.path.basename(f)}")
         print(f"{'-'*60}")
 
         try:
-            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-                log_content = "".join(f.readlines()[:100])
+            # 合并所有文件的前100行
+            combined_content = ""
+            for log_file in dir_files:
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()[:100]
+                    combined_content += f"\n\n=== 文件: {os.path.basename(log_file)} ===\n"
+                    combined_content += "".join(lines)
 
-            answer = json.loads(analyzer.analyze(log_content, stream=False))
+            # 分析合并后的内容
+            answer = json.loads(analyzer.analyze(combined_content, stream=False))
 
-            results.append({
-                "file": log_file,
-                "filename": os.path.basename(log_file),
-                "size": len(log_content),
+            results_by_dir[dir_key] = {
+                "files": [os.path.basename(f) for f in dir_files],
                 "analysis": answer,
-            })
+            }
+            print(f"   ✅ 分析完成")
         except Exception as e:
-            print(f"\n❌ 分析失败: {e}")
-            results.append({
-                "file": log_file,
-                "filename": os.path.basename(log_file),
+            print(f"   ❌ 分析失败: {e}")
+            results_by_dir[dir_key] = {
+                "files": [os.path.basename(f) for f in dir_files],
                 "error": str(e),
-            })
+            }
 
     # 保存结果
     output_path = os.path.join(dir_path, "analysis_results.json")
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        json.dump(results_by_dir, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*60}")
     print(f"✅ 分析完成，结果已保存至 {output_path}")
+    print(f"   共 {len(results_by_dir)} 个目录: {', '.join(results_by_dir.keys())}")
     print(f"{'='*60}")
 
 
