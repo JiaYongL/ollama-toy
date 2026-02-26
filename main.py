@@ -1,28 +1,26 @@
 """
 crash_analyzer/main.py
 
-使用示例与演示入口。
-运行方式：
-    python main.py --mode system          # System Prompt 直注法
-    python main.py --mode rag             # RAG 检索增强法
-    python main.py --mode rule            # 纯规则引擎（无LLM，极速）
-    python main.py --mode system --batch  # 批量分析
+使用示例与：
+    python main.py                      # 分析默认示例日志
+    python main.py --batch              # 批量分析所有示例日志
     python main.py --log "你的日志文本"   # 分析自定义日志
     python main.py --file crash.log       # 从文件读取日志
+    python main.py --dir /path/to/logs   # 扫描目录中的所有日志文件
+    python main.py --list-models          # 列出可用模型
 """
 
 import argparse
 import json
 import sys
 import os
+import glob
 
 # 确保能找到同目录下的模块
 sys.path.insert(0, os.path.dirname(__file__))
 
 from analyzer import (
     SystemPromptAnalyzer,
-    RAGAnalyzer,
-    RuleEnginePreFilter,
     list_models,
     DEFAULT_MODEL,
 )
@@ -91,49 +89,77 @@ def run_system_prompt_mode(model: str, log: str, batch: bool):
         analyzer.analyze(target_log)
 
 
-def run_rag_mode(model: str, log: str):
-    analyzer = RAGAnalyzer(chat_model=model)
-    target_log = log if log else DEMO_LOGS[1]  # 默认展示虚拟内存不足
-    result = analyzer.analyze_with_scores(target_log)
-    print("\n[RAG 检索分数]")
-    for r in result["retrieved_rules"]:
-        print(f"  {r['name']}: {r['score']:.4f}")
+# ─────────────────────────────────────────────
+#  目录扫描分析
+# ─────────────────────────────────────────────
+def analyze_directory(dir_path: str, model: str):
+    """
+    扫描目录中的所有日志文件并分析。
+    支持的文件模式：
+      - jbr_err*.log
+      - java_error*.log
+      - hs_err_pid*.log
+    """
+    analyzer = SystemPromptAnalyzer(model=model)
 
+    # 查找所有匹配的日志文件
+    patterns = [
+        "jbr_err*.log",
+        "java_error*.log",
+    ]
 
-def run_rule_engine_mode(log: str):
-    """纯规则引擎模式，无需LLM，毫秒级响应"""
-    engine = RuleEnginePreFilter()
+    log_files = []
+    for pattern in patterns:
+        # 当前目录
+        log_files.extend(glob.glob(os.path.join(dir_path, pattern)))
+        # 递归搜索子目录
+        log_files.extend(glob.glob(os.path.join(dir_path, "**", pattern), recursive=True))
+
+    # 去重并排序
+    log_files = sorted(set(log_files))
+
+    if not log_files:
+        print(f"\n⚠️  在目录 {dir_path} 中未找到匹配的日志文件")
+        print(f"   支持的文件模式: {', '.join(patterns)}")
+
+    print(f"\n{'#'*60}")
+    print(f"# 找到 {len(log_files)} 个日志文件")
+    print(f"{'#'*60}\n")
+
+    # 批量分析
+    results = []
+    for i, log_file in enumerate(log_files, 1):
+        print(f"\n[{i}/{len(log_files)}] 分析: {os.path.basename(log_file)}")
+        print(f"{'-'*60}")
+
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                log_content = "".join(f.readlines()[:100])
+
+            answer = json.loads(analyzer.analyze(log_content, stream=False))
+
+            results.append({
+                "file": log_file,
+                "filename": os.path.basename(log_file),
+                "size": len(log_content),
+                "analysis": answer,
+            })
+        except Exception as e:
+            print(f"\n❌ 分析失败: {e}")
+            results.append({
+                "file": log_file,
+                "filename": os.path.basename(log_file),
+                "error": str(e),
+            })
+
+    # 保存结果
+    output_path = os.path.join(dir_path, "analysis_results.json")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
     print(f"\n{'='*60}")
-    print("规则引擎预分类（无LLM，基于关键词匹配）")
+    print(f"✅ 分析完成，结果已保存至 {output_path}")
     print(f"{'='*60}")
-
-    logs_to_check = [log] if log else DEMO_LOGS
-    for i, crash_log in enumerate(logs_to_check, 1):
-        preview = crash_log[:100].replace("\n", " ")
-        print(f"\n[日志 {i}] {preview}...")
-        result = engine.prefilter(crash_log)
-        print(engine.format_result(result))
-        print("-" * 40)
-
-
-def run_hybrid_mode(model: str, log: str):
-    """
-    混合模式：规则引擎快速预判 + LLM 深度分析
-    若规则引擎置信度为高，直接返回；否则调用LLM补充分析
-    """
-    engine = RuleEnginePreFilter()
-    target_log = log if log else DEMO_LOGS[0]
-
-    print("\n[混合模式] 第一步：规则引擎快速预判")
-    result = engine.prefilter(target_log)
-    print(engine.format_result(result))
-
-    if result and result["confidence"] == "高":
-        print("\n[混合模式] 规则引擎置信度高，跳过LLM调用 ✓")
-    else:
-        print("\n[混合模式] 规则引擎置信度不足，调用LLM深度分析...")
-        analyzer = SystemPromptAnalyzer(model=model)
-        analyzer.analyze(target_log)
 
 
 # ─────────────────────────────────────────────
@@ -145,21 +171,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  python main.py --mode system
-  python main.py --mode rag
-  python main.py --mode rule
-  python main.py --mode hybrid
-  python main.py --mode system --batch
-  python main.py --mode system --log "NullPointerException: backBuffers[i] is null"
-  python main.py --mode system --file /path/to/hs_err_pid1234.log
+  python main.py
+  python main.py --batch
+  python main.py --log "NullPointerException: backBuffers[i] is null"
+  python main.py --file /path/to/hs_err_pid1234.log
+  python main.py --dir /path/to/logs
   python main.py --list-models
         """,
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["system", "rag", "rule", "hybrid"],
-        default="system",
-        help="知识注入模式（默认: system）",
     )
     parser.add_argument(
         "--model",
@@ -176,7 +194,13 @@ def main():
         "--file",
         type=str,
         default="",
-        help="从文件读取崩溃日志（hs_err_pid*.log）",
+        help="从文件读取崩溃日志（jbr_err*.log）",
+    )
+    parser.add_argument(
+        "--dir",
+        type=str,
+        default="",
+        help="扫描目录中的所有日志文件（jbr_err*.log, java_error*.log）",
     )
     parser.add_argument(
         "--batch",
@@ -197,10 +221,18 @@ def main():
             models = list_models()
             print("本地可用模型：")
             for m in models:
-                marker = " ← 当前默认" if m.startswith(DEFAULT_MODEL) else ""
+                marker = " ← 当前默认" if m == DEFAULT_MODEL else ""
                 print(f"  • {m}{marker}")
         except Exception as e:
             print(f"获取模型列表失败: {e}")
+        return
+
+    # 优先处理目录扫描
+    if args.dir:
+        if not os.path.isdir(args.dir):
+            print(f"❌ 目录不存在: {args.dir}")
+            return
+        analyze_directory(args.dir, args.model)
         return
 
     # 读取日志
@@ -210,19 +242,10 @@ def main():
             log_text = f.read()
         print(f"[已读取] {args.file}（{len(log_text)} 字符）")
 
-    # 分发到对应模式
+    # 运行分析
     print(f"\n🚀 启动 Crash 分析器")
-    print(f"   模式: {args.mode}")
     print(f"   模型: {args.model}\n")
-
-    if args.mode == "system":
-        run_system_prompt_mode(args.model, log_text, args.batch)
-    elif args.mode == "rag":
-        run_rag_mode(args.model, log_text)
-    elif args.mode == "rule":
-        run_rule_engine_mode(log_text)
-    elif args.mode == "hybrid":
-        run_hybrid_mode(args.model, log_text)
+    run_system_prompt_mode(args.model, log_text, args.batch)
 
 
 if __name__ == "__main__":
