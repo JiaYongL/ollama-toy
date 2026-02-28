@@ -11,7 +11,7 @@ System Prompt 直注法：将完整诊断知识库塞入 system prompt。
 import json
 import requests
 
-from knowledge_base import SYSTEM_KNOWLEDGE_TEXT
+from knowledge_base import SYSTEM_PROMPT
 
 
 # ─────────────────────────────────────────────
@@ -104,19 +104,17 @@ class SystemPromptAnalyzer:
         self.model = model
         self._system_msg = {
             "role": "system",
-            "content": SYSTEM_KNOWLEDGE_TEXT,
+            "content": SYSTEM_PROMPT,
         }
         print(f"[SystemPromptAnalyzer] 使用模型: {self.model}")
-        print(f"[SystemPromptAnalyzer] 知识注入长度: {len(SYSTEM_KNOWLEDGE_TEXT)} 字符")
+        print(f"[SystemPromptAnalyzer] 知识注入长度: {len(SYSTEM_PROMPT)} 字符")
 
     def analyze(self, crash_log: str, stream: bool = True, json_mode: bool = True) -> str:
         """分析单条崩溃日志"""
         user_msg = {
             "role": "user",
             "content": (
-                "请分析以下崩溃日志，按照知识库中的诊断规则进行判断。\n\n"
-                "【重要】你必须只输出纯 JSON 格式，不要输出任何其他文字、解释或 markdown 标记！\n\n"
-                "崩溃日志：\n\n"
+                "The log to analyze is as follows, output the crash fingerprint in JSON format:\n\n"
                 "```\n"
                 f"{crash_log.strip()}\n"
                 "```"

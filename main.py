@@ -148,6 +148,9 @@ def analyze_directory(dir_path: str, model: str):
         # 获取相对于根目录的目录名作为键
         rel_path = os.path.relpath(os.path.dirname(log_file), dir_path)
         dir_key = rel_path if rel_path != "." else "root"
+        index = dir_key.find(os.sep)
+        if index != -1:
+            dir_key = dir_key[:index]  # 取第一级目录作为键
         
         if dir_key not in files_by_dir:
             files_by_dir[dir_key] = []
@@ -158,14 +161,18 @@ def analyze_directory(dir_path: str, model: str):
     total_dirs = len(files_by_dir)
     
     for dir_idx, (dir_key, dir_files) in enumerate(files_by_dir.items(), 1):
-        # 每个目录最多取2个文件
-        dir_files = dir_files[:2]
-        
         print(f"\n[{dir_idx}/{total_dirs}] 分析目录: {dir_key}")
         print(f"   文件数: {len(dir_files)}")
         for f in dir_files:
             print(f"     - {os.path.basename(f)}")
         print(f"{'-'*60}")
+
+        # 找到目录中为jbr_err*.log的文件，如果有就优先分析，否则分析java_error*.log或hs_err_pid*.log
+        jbr_files = [f for f in dir_files if f.endswith("jbr_err*.log")]
+        if jbr_files:
+            dir_files = jbr_files
+        else:
+            dir_files = dir_files[:1]
 
         try:
             # 合并所有文件的前100行
@@ -177,7 +184,7 @@ def analyze_directory(dir_path: str, model: str):
                     combined_content += "".join(lines)
 
             # 分析合并后的内容
-            answer = json.loads(analyzer.analyze(combined_content, stream=False))
+            answer = json.loads(analyzer.analyze(combined_content, stream=True))
 
             results_by_dir[dir_key] = {
                 "files": [os.path.basename(f) for f in dir_files],
@@ -193,12 +200,17 @@ def analyze_directory(dir_path: str, model: str):
 
     # 保存结果
     output_path = os.path.join(dir_path, "analysis_results.json")
+    output_list = []
+    for k, v in results_by_dir.items():
+        if v['analysis'] is None:
+            continue
+        v['analysis']['directory'] = k
+        output_list.append(v['analysis'])
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results_by_dir, f, ensure_ascii=False, indent=2)
+        json.dump(output_list, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*60}")
     print(f"✅ 分析完成，结果已保存至 {output_path}")
-    print(f"   共 {len(results_by_dir)} 个目录: {', '.join(results_by_dir.keys())}")
     print(f"{'='*60}")
 
 
