@@ -187,14 +187,14 @@ def analyze_directory(dir_path: str, model: str):
             answer = json.loads(analyzer.analyze(combined_content, stream=True))
 
             results_by_dir[dir_key] = {
-                "files": [os.path.basename(f) for f in dir_files],
+                "file": os.path.relpath(os.path.dirname(dir_files[0]), dir_path),
                 "analysis": answer,
             }
             print(f"   ✅ 分析完成")
         except Exception as e:
             print(f"   ❌ 分析失败: {e}")
             results_by_dir[dir_key] = {
-                "files": [os.path.basename(f) for f in dir_files],
+                "file": os.path.relpath(os.path.dirname(dir_files[0]), dir_path),
                 "error": str(e),
             }
 
@@ -204,7 +204,7 @@ def analyze_directory(dir_path: str, model: str):
     for k, v in results_by_dir.items():
         if v['analysis'] is None:
             continue
-        v['analysis']['directory'] = k
+        v['analysis']['link'] = "=HYPERLINK(\"./" + v['file'] + "\", \"link\")"
         output_list.append(v['analysis'])
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_list, f, ensure_ascii=False, indent=2)
